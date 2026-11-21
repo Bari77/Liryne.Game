@@ -1,0 +1,12 @@
+{
+  "servers": [
+    {
+      "id": "local",
+      "name": "Liryne",
+      "region": "Local",
+      "authUrl": "http://127.0.0.1:8080",
+      "worldHost": "127.0.0.1",
+      "worldPort": 7777
+    }
+  ]
+}
