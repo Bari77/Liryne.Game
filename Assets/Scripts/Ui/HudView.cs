@@ -4,8 +4,10 @@ using Liryne.Game.Content;
 using Liryne.Game.World;
 using Liryne.Protocol.Messages.Characters;
 using Liryne.Protocol.Messages.Chat;
+using Liryne.Protocol.Messages.Combat;
 using Liryne.Protocol.Messages.Entities;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
@@ -33,8 +35,8 @@ namespace Liryne.Game.Ui
         readonly GameObject _suggestRoot;
         readonly GameObject _profileRoot;
         readonly Text _profileBody;
+        readonly RawImage _profilePreview;
         readonly GameObject _inventoryRoot;
-        readonly Text _status;
         readonly Action<ChatChannel, string> _onSend;
         readonly Action<Guid> _onInspect;
         readonly Action _onSelfProfile;
@@ -47,59 +49,86 @@ namespace Liryne.Game.Ui
         readonly Text _targetMpText;
         readonly Image _targetHpFill;
         readonly Image _targetMpFill;
+        readonly Image[] _spellSlots = new Image[SpellSlots];
+        readonly Text[] _spellLabels = new Text[SpellSlots];
+        readonly Text[] _spellCool = new Text[SpellSlots];
+        readonly Action<ushort> _onCast;
+        readonly HudLayoutStore _layout = new HudLayoutStore();
+        readonly RectTransform[] _movable = new RectTransform[5];
+        readonly int[] _bar = new int[SpellSlots];
+        readonly Dictionary<ushort, uint> _cooldownEnds = new Dictionary<ushort, uint>();
 
         ChatChannel _channel = ChatChannel.Say;
+        uint _serverTick;
+        ushort _tickRate = 20;
         IReadOnlyList<CommandInfo> _commands = Array.Empty<CommandInfo>();
         IReadOnlyList<string> _playerNames = Array.Empty<string>();
+        RectTransform _ghost;
+        Text _ghostLabel;
+        Canvas _canvas;
+
+        public RawImage ProfilePreview => _profilePreview;
+
+        public bool ProfileVisible => _profileRoot.activeSelf;
+
+        public const int SpellSlots = 30;
+        const int SpellCols = 10;
+        const int SpellRows = 3;
 
         public HudView(
             Transform canvas,
             Action<ChatChannel, string> onSend,
             Action<Guid> onInspect,
             Action onSelfProfile,
-            Action onLogout)
+            Action onLogout,
+            Action<ushort> onCast)
         {
             _onSend = onSend;
             _onInspect = onInspect;
             _onSelfProfile = onSelfProfile;
             _onLogout = onLogout;
+            _onCast = onCast;
 
             Image root = UiFactory.Panel(canvas, "Hud", new Color(0, 0, 0, 0));
             UiFactory.Stretch(root.rectTransform);
             root.raycastTarget = false;
             _root = root.gameObject;
+            _canvas = canvas.GetComponent<Canvas>();
 
             Image vitals = UiFactory.Panel(root.transform, "Vitals", UiTheme.Panel);
-            UiFactory.Anchor(vitals.rectTransform, new Vector2(0, 1), new Vector2(0, 1), new Vector2(16, -118), new Vector2(360, -16));
+            UiFactory.Anchor(vitals.rectTransform, new Vector2(0, 1), new Vector2(0, 1), new Vector2(16, -134), new Vector2(360, -16));
+            MakeGrip(vitals.rectTransform);
             _name = UiFactory.Label(vitals.transform, "Name", 20, UiTheme.Gold, FontStyle.Bold, TextAnchor.MiddleLeft);
-            UiFactory.Anchor(_name.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -32), new Vector2(-12, -6));
+            UiFactory.Anchor(_name.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -48), new Vector2(-12, -22));
             UiFactory.Bar(vitals.transform, "Hp", UiTheme.Hp, out _hpFill);
-            UiFactory.Anchor(_hpFill.transform.parent.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -58), new Vector2(-12, -36));
+            UiFactory.Anchor(_hpFill.transform.parent.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -74), new Vector2(-12, -52));
             _hpText = UiFactory.Label(_hpFill.transform.parent, "HpText", 14, UiTheme.Text, FontStyle.Bold, TextAnchor.MiddleCenter);
             UiFactory.Stretch(_hpText.rectTransform);
             UiFactory.Bar(vitals.transform, "Mp", UiTheme.Mp, out _mpFill);
-            UiFactory.Anchor(_mpFill.transform.parent.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -88), new Vector2(-12, -66));
+            UiFactory.Anchor(_mpFill.transform.parent.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -104), new Vector2(-12, -82));
             _mpText = UiFactory.Label(_mpFill.transform.parent, "MpText", 14, UiTheme.Text, FontStyle.Bold, TextAnchor.MiddleCenter);
             UiFactory.Stretch(_mpText.rectTransform);
 
-            Button profile = UiFactory.Button(root.transform, "ProfileBtn", "Profil (C)", UiTheme.Panel);
-            UiFactory.Anchor(profile.GetComponent<RectTransform>(), new Vector2(1, 1), new Vector2(1, 1), new Vector2(-200, -60), new Vector2(-16, -16));
+            Image menu = UiFactory.Panel(root.transform, "Menu", UiTheme.Panel);
+            UiFactory.Anchor(menu.rectTransform, new Vector2(1, 1), new Vector2(1, 1), new Vector2(-200, -196), new Vector2(-16, -16));
+            MakeGrip(menu.rectTransform);
+            Button profile = UiFactory.Button(menu.transform, "ProfileBtn", "Profil (C)", UiTheme.PanelInner);
+            UiFactory.Anchor(profile.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(8, -64), new Vector2(-8, -24));
             profile.onClick.AddListener(() => ToggleProfile());
-
-            Button inventory = UiFactory.Button(root.transform, "InvBtn", "Sac (I)", UiTheme.Panel);
-            UiFactory.Anchor(inventory.GetComponent<RectTransform>(), new Vector2(1, 1), new Vector2(1, 1), new Vector2(-200, -112), new Vector2(-16, -68));
+            Button inventory = UiFactory.Button(menu.transform, "InvBtn", "Sac (I)", UiTheme.PanelInner);
+            UiFactory.Anchor(inventory.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(8, -112), new Vector2(-8, -72));
             inventory.onClick.AddListener(ToggleInventory);
-
-            Button logout = UiFactory.Button(root.transform, "LogoutBtn", "Déconnexion", UiTheme.Slot);
-            UiFactory.Anchor(logout.GetComponent<RectTransform>(), new Vector2(1, 1), new Vector2(1, 1), new Vector2(-200, -164), new Vector2(-16, -120));
+            Button logout = UiFactory.Button(menu.transform, "LogoutBtn", "Déconnexion", UiTheme.Slot);
+            UiFactory.Anchor(logout.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(8, -160), new Vector2(-8, -120));
             logout.onClick.AddListener(() => _onLogout());
 
             _targetRoot = BuildTarget(root.transform, out _targetName, out _targetMeta, out _targetHpFill, out _targetHpText, out _targetMpFill, out _targetMpText);
 
             Image chat = UiFactory.Panel(root.transform, "Chat", UiTheme.Panel);
-            UiFactory.Anchor(chat.rectTransform, new Vector2(0, 0), new Vector2(0, 0), new Vector2(16, 16), new Vector2(520, 280));
+            UiFactory.Anchor(chat.rectTransform, new Vector2(0, 0), new Vector2(0, 0), new Vector2(16, 16), new Vector2(520, 296));
+            MakeGrip(chat.rectTransform);
             _chatScroll = UiFactory.Scroll(chat.transform, "Log", out _chatContent);
-            UiFactory.Anchor(_chatScroll.GetComponent<RectTransform>(), new Vector2(0, 0), new Vector2(1, 1), new Vector2(8, 78), new Vector2(-8, -40));
+            UiFactory.Anchor(_chatScroll.GetComponent<RectTransform>(), new Vector2(0, 0), new Vector2(1, 1), new Vector2(8, 78), new Vector2(-8, -56));
             PinChatToBottom();
 
             _channelButtons = new Button[PlayerChannels.Length];
@@ -108,7 +137,7 @@ namespace Liryne.Game.Ui
                 ChatChannel channel = PlayerChannels[i];
                 Button btn = UiFactory.Button(chat.transform, channel.ToString(), ClientCatalog.ChannelLabel(channel), UiTheme.Slot);
                 float x = 8 + i * 100;
-                UiFactory.Anchor(btn.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(0, 1), new Vector2(x, -34), new Vector2(x + 96, -6));
+                UiFactory.Anchor(btn.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(0, 1), new Vector2(x, -50), new Vector2(x + 96, -22));
                 btn.onClick.AddListener(() => SetChannel(channel));
                 _channelButtons[i] = btn;
             }
@@ -131,12 +160,46 @@ namespace Liryne.Game.Ui
             UiFactory.Stretch(_suggestContent.parent.GetComponent<RectTransform>(), 4, 4, 4, 4);
             _suggestRoot.SetActive(false);
 
-            _status = UiFactory.Label(root.transform, "Status", 16, UiTheme.Muted, FontStyle.Normal, TextAnchor.LowerRight);
-            UiFactory.Anchor(_status.rectTransform, new Vector2(1, 0), new Vector2(1, 0), new Vector2(-420, 16), new Vector2(-16, 48));
-            _status.text = "WASD · clic droit caméra · Tab cible · Entrée chat · C profil · I sac";
+            Image bar = UiFactory.Panel(root.transform, "Spells", UiTheme.Panel);
+            UiFactory.Anchor(bar.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(-296, 16), new Vector2(296, 220));
+            MakeGrip(bar.rectTransform);
+            const float slot = 52f;
+            const float gap = 4f;
+            const float pad = 8f;
+            for (int i = 0; i < SpellSlots; i++)
+            {
+                int col = i % SpellCols;
+                int row = i / SpellCols;
+                float x = pad + col * (slot + gap);
+                float y = pad + row * (slot + gap);
+                Image cell = UiFactory.Panel(bar.transform, "Spell" + i, UiTheme.Slot);
+                UiFactory.Anchor(cell.rectTransform, new Vector2(0, 0), new Vector2(0, 0), new Vector2(x, y), new Vector2(x + slot, y + slot));
+                Text label = UiFactory.Label(cell.transform, "Label", 12, UiTheme.Text, FontStyle.Bold, TextAnchor.MiddleCenter);
+                UiFactory.Stretch(label.rectTransform, 2, 4, 2, 10);
+                Text cool = UiFactory.Label(cell.transform, "Cd", 12, UiTheme.Gold, FontStyle.Bold, TextAnchor.LowerCenter);
+                UiFactory.Anchor(cool.rectTransform, new Vector2(0, 0), new Vector2(1, 0), new Vector2(1, 2), new Vector2(-1, 16));
+                var hook = cell.gameObject.AddComponent<SpellBarSlot>();
+                hook.Index = i;
+                hook.Clicked = CastSlot;
+                hook.DragBegan = BeginSpellDrag;
+                hook.Dragged = MoveSpellGhost;
+                hook.Ended = EndSpellDrag;
+                hook.Dropped = DropSpell;
+                _spellSlots[i] = cell;
+                _spellLabels[i] = label;
+                _spellCool[i] = cool;
+            }
+
+            _movable[0] = vitals.rectTransform;
+            _movable[1] = menu.rectTransform;
+            _movable[2] = _targetRoot.GetComponent<RectTransform>();
+            _movable[3] = chat.rectTransform;
+            _movable[4] = bar.rectTransform;
+            ApplySavedLayout();
 
             _profileRoot = BuildProfile(root.transform);
             _profileBody = _profileRoot.transform.Find("Body").GetComponent<Text>();
+            _profilePreview = _profileRoot.transform.Find("PreviewFrame/Preview").GetComponent<RawImage>();
             _inventoryRoot = BuildInventory(root.transform);
             SetChannel(ChatChannel.Say);
             _root.SetActive(false);
@@ -147,7 +210,16 @@ namespace Liryne.Game.Ui
 
         public bool ChatFocused => _chatInput.isFocused;
 
-        public void SetVisible(bool visible) => _root.SetActive(visible);
+        public void SetVisible(bool visible)
+        {
+            _root.SetActive(visible);
+            if (!visible)
+            {
+                _layout.Flush();
+            }
+        }
+
+        public void FlushLayout() => _layout.Flush();
 
         public void SetCommands(IReadOnlyList<CommandInfo> commands) =>
             _commands = commands ?? Array.Empty<CommandInfo>();
@@ -195,6 +267,321 @@ namespace Liryne.Game.Ui
             _targetMpFill.fillAmount = state.MaxMp == 0 ? 0f : (float)state.Mp / state.MaxMp;
             _targetHpText.text = $"{state.Hp} / {state.MaxHp}";
             _targetMpText.text = $"{state.Mp} / {state.MaxMp}";
+        }
+
+        public void SetTickRate(ushort tickRate) => _tickRate = tickRate == 0 ? (ushort)20 : tickRate;
+
+        public void SetServerTick(uint tick)
+        {
+            _serverTick = tick;
+            RefreshSpells();
+        }
+
+        public void BindSpellBook(SpellBook book)
+        {
+            var known = new HashSet<ushort>();
+            if (book?.Spells is not null)
+            {
+                for (int i = 0; i < book.Spells.Count; i++)
+                {
+                    SpellSlot slot = book.Spells[i];
+                    if (slot.SpellId == 0)
+                    {
+                        continue;
+                    }
+
+                    known.Add(slot.SpellId);
+                    _cooldownEnds[slot.SpellId] = slot.CooldownEndTick;
+                }
+            }
+
+            bool empty = true;
+            for (int i = 0; i < SpellSlots; i++)
+            {
+                if (_bar[i] == 0)
+                {
+                    continue;
+                }
+
+                if (!known.Contains((ushort)_bar[i]))
+                {
+                    _bar[i] = 0;
+                }
+                else
+                {
+                    empty = false;
+                }
+            }
+
+            if (book?.Spells is null)
+            {
+                RefreshSpells();
+                return;
+            }
+
+            if (empty)
+            {
+                int write = 0;
+                for (int i = 0; i < book.Spells.Count && write < SpellSlots; i++)
+                {
+                    if (book.Spells[i].SpellId != 0)
+                    {
+                        _bar[write++] = book.Spells[i].SpellId;
+                    }
+                }
+            }
+            else
+            {
+                for (int i = 0; i < book.Spells.Count; i++)
+                {
+                    ushort id = book.Spells[i].SpellId;
+                    if (id == 0 || IndexOfSpell(id) >= 0)
+                    {
+                        continue;
+                    }
+
+                    int hole = FirstEmptySlot();
+                    if (hole >= 0)
+                    {
+                        _bar[hole] = id;
+                    }
+                }
+            }
+
+            PersistBar();
+            RefreshSpells();
+        }
+
+        public void ApplyCastResult(SpellCastResult result)
+        {
+            if (result.SpellId == 0)
+            {
+                return;
+            }
+
+            if (result.CooldownEndTick != 0)
+            {
+                _cooldownEnds[result.SpellId] = result.CooldownEndTick;
+            }
+
+            RefreshSpells();
+        }
+
+        public bool TrySpellAt(int slotIndex, out ushort spellId)
+        {
+            spellId = 0;
+            if (slotIndex < 0 || slotIndex >= SpellSlots)
+            {
+                return false;
+            }
+
+            spellId = (ushort)_bar[slotIndex];
+            return spellId != 0;
+        }
+
+        void CastSlot(int slot)
+        {
+            if (TrySpellAt(slot, out ushort spellId))
+            {
+                _onCast?.Invoke(spellId);
+            }
+        }
+
+        void RefreshSpells()
+        {
+            float rate = Mathf.Max(1, _tickRate);
+            for (int i = 0; i < SpellSlots; i++)
+            {
+                ushort id = (ushort)_bar[i];
+                if (id == 0)
+                {
+                    _spellLabels[i].text = i < SpellCols ? HotkeyLabel(i) : string.Empty;
+                    _spellLabels[i].color = UiTheme.Muted;
+                    _spellCool[i].text = string.Empty;
+                    continue;
+                }
+
+                _spellLabels[i].color = UiTheme.Text;
+                string key = i < SpellCols ? HotkeyLabel(i) + "\n" : string.Empty;
+                _spellLabels[i].text = key + ClientCatalog.SpellName(id);
+                uint end = _cooldownEnds.TryGetValue(id, out uint tick) ? tick : 0;
+                uint remain = end > _serverTick ? end - _serverTick : 0;
+                _spellCool[i].text = remain == 0 ? string.Empty : (remain / rate).ToString("0.0");
+            }
+        }
+
+        static string HotkeyLabel(int slot) => slot == 9 ? "0" : (slot + 1).ToString();
+
+        int IndexOfSpell(ushort spellId)
+        {
+            for (int i = 0; i < SpellSlots; i++)
+            {
+                if (_bar[i] == spellId)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        int FirstEmptySlot()
+        {
+            for (int i = 0; i < SpellSlots; i++)
+            {
+                if (_bar[i] == 0)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        void MakeGrip(RectTransform panel)
+        {
+            Image grip = UiFactory.Panel(panel, "Move", new Color(1f, 1f, 1f, 0.1f));
+            UiFactory.Anchor(grip.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(4, -16), new Vector2(-4, -4));
+            grip.raycastTarget = true;
+            var drag = grip.gameObject.AddComponent<HudDrag>();
+            drag.Target = panel;
+            drag.Moved = OnPanelMoved;
+        }
+
+        void OnPanelMoved()
+        {
+            CapturePanelPoses();
+            _layout.MarkDirty();
+        }
+
+        void ApplySavedLayout()
+        {
+            if (_layout.Data.Bar is not null && _layout.Data.Bar.Length == SpellSlots)
+            {
+                Array.Copy(_layout.Data.Bar, _bar, SpellSlots);
+            }
+
+            if (_layout.Data.Panels is null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _layout.Data.Panels.Length; i++)
+            {
+                HudPanelPose pose = _layout.Data.Panels[i];
+                if (pose is null || string.IsNullOrEmpty(pose.Id))
+                {
+                    continue;
+                }
+
+                for (int p = 0; p < _movable.Length; p++)
+                {
+                    if (_movable[p] is not null && _movable[p].name == pose.Id)
+                    {
+                        _movable[p].anchoredPosition = new Vector2(pose.X, pose.Y);
+                        break;
+                    }
+                }
+            }
+        }
+
+        void CapturePanelPoses()
+        {
+            var poses = new HudPanelPose[_movable.Length];
+            for (int i = 0; i < _movable.Length; i++)
+            {
+                RectTransform rt = _movable[i];
+                Vector2 pos = rt.anchoredPosition;
+                poses[i] = new HudPanelPose { Id = rt.name, X = pos.x, Y = pos.y };
+            }
+
+            _layout.Data.Panels = poses;
+        }
+
+        void PersistBar()
+        {
+            Array.Copy(_bar, _layout.Data.Bar, SpellSlots);
+            _layout.MarkDirty();
+        }
+
+        void BeginSpellDrag(int index, PointerEventData eventData)
+        {
+            if (_bar[index] == 0)
+            {
+                return;
+            }
+
+            EnsureGhost();
+            _ghost.gameObject.SetActive(true);
+            _ghost.SetAsLastSibling();
+            _ghostLabel.text = ClientCatalog.SpellName((ushort)_bar[index]);
+            MoveSpellGhost(eventData);
+        }
+
+        void MoveSpellGhost(PointerEventData eventData)
+        {
+            if (_ghost is null || !_ghost.gameObject.activeSelf)
+            {
+                return;
+            }
+
+            RectTransform canvasRt = _canvas.transform as RectTransform;
+            if (canvasRt is null)
+            {
+                return;
+            }
+
+            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                canvasRt, eventData.position, eventData.pressEventCamera, out Vector2 local))
+            {
+                _ghost.anchoredPosition = local;
+            }
+        }
+
+        void EndSpellDrag()
+        {
+            if (_ghost is not null)
+            {
+                _ghost.gameObject.SetActive(false);
+            }
+        }
+
+        void DropSpell(int from, int to)
+        {
+            if (from < 0 || to < 0 || from >= SpellSlots || to >= SpellSlots || from == to)
+            {
+                return;
+            }
+
+            if (_bar[from] == 0)
+            {
+                return;
+            }
+
+            int held = _bar[from];
+            _bar[from] = _bar[to];
+            _bar[to] = held;
+            PersistBar();
+            RefreshSpells();
+        }
+
+        void EnsureGhost()
+        {
+            if (_ghost is not null)
+            {
+                return;
+            }
+
+            Image ghost = UiFactory.Panel(_canvas.transform, "SpellGhost", new Color(UiTheme.Slot.r, UiTheme.Slot.g, UiTheme.Slot.b, 0.88f));
+            ghost.raycastTarget = false;
+            ghost.rectTransform.sizeDelta = new Vector2(56f, 56f);
+            ghost.rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
+            ghost.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+            _ghostLabel = UiFactory.Label(ghost.transform, "Label", 12, UiTheme.Text, FontStyle.Bold, TextAnchor.MiddleCenter);
+            UiFactory.Stretch(_ghostLabel.rectTransform, 2, 2, 2, 2);
+            _ghostLabel.raycastTarget = false;
+            _ghost = ghost.rectTransform;
+            _ghost.gameObject.SetActive(false);
         }
 
         public void AddChat(ChatMessage message)
@@ -251,6 +638,7 @@ namespace Liryne.Game.Ui
 
         public void Tick()
         {
+            _layout.Tick();
 #if ENABLE_INPUT_SYSTEM
             Keyboard keyboard = Keyboard.current;
             if (keyboard is null)
@@ -455,17 +843,18 @@ namespace Liryne.Game.Ui
             out Text mpText)
         {
             Image panel = UiFactory.Panel(parent, "Target", UiTheme.Panel);
-            UiFactory.Anchor(panel.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-190, -150), new Vector2(190, -16));
+            UiFactory.Anchor(panel.rectTransform, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(-190, -166), new Vector2(190, -16));
+            MakeGrip(panel.rectTransform);
             name = UiFactory.Label(panel.transform, "Name", 20, UiTheme.Gold, FontStyle.Bold, TextAnchor.MiddleLeft);
-            UiFactory.Anchor(name.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -32), new Vector2(-12, -6));
+            UiFactory.Anchor(name.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -48), new Vector2(-12, -22));
             meta = UiFactory.Label(panel.transform, "Meta", 15, UiTheme.Muted, FontStyle.Normal, TextAnchor.MiddleLeft);
-            UiFactory.Anchor(meta.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -56), new Vector2(-12, -32));
+            UiFactory.Anchor(meta.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -72), new Vector2(-12, -48));
             UiFactory.Bar(panel.transform, "Hp", UiTheme.Hp, out hpFill);
-            UiFactory.Anchor(hpFill.transform.parent.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -86), new Vector2(-12, -64));
+            UiFactory.Anchor(hpFill.transform.parent.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -102), new Vector2(-12, -80));
             hpText = UiFactory.Label(hpFill.transform.parent, "HpText", 14, UiTheme.Text, FontStyle.Bold, TextAnchor.MiddleCenter);
             UiFactory.Stretch(hpText.rectTransform);
             UiFactory.Bar(panel.transform, "Mp", UiTheme.Mp, out mpFill);
-            UiFactory.Anchor(mpFill.transform.parent.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -116), new Vector2(-12, -94));
+            UiFactory.Anchor(mpFill.transform.parent.GetComponent<RectTransform>(), new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -132), new Vector2(-12, -110));
             mpText = UiFactory.Label(mpFill.transform.parent, "MpText", 14, UiTheme.Text, FontStyle.Bold, TextAnchor.MiddleCenter);
             UiFactory.Stretch(mpText.rectTransform);
             panel.gameObject.SetActive(false);
@@ -503,12 +892,22 @@ namespace Liryne.Game.Ui
         GameObject BuildProfile(Transform parent)
         {
             Image panel = UiFactory.Panel(parent, "Profile", UiTheme.Panel);
-            UiFactory.Anchor(panel.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-260, -220), new Vector2(260, 220));
+            UiFactory.Anchor(panel.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-420, -250), new Vector2(420, 250));
             Text title = UiFactory.Label(panel.transform, "Title", 26, UiTheme.Gold, FontStyle.Bold, TextAnchor.MiddleCenter);
             UiFactory.Anchor(title.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(16, -52), new Vector2(-16, -12));
             title.text = "Profil";
+
+            Image frame = UiFactory.Panel(panel.transform, "PreviewFrame", UiTheme.PanelInner);
+            UiFactory.Anchor(frame.rectTransform, new Vector2(0, 0), new Vector2(0, 1), new Vector2(20, 56), new Vector2(250, -60));
+            var rawGo = new GameObject("Preview");
+            rawGo.transform.SetParent(frame.transform, false);
+            RawImage preview = rawGo.AddComponent<RawImage>();
+            preview.color = Color.white;
+            preview.raycastTarget = true;
+            UiFactory.Stretch(preview.rectTransform, 8, 8, 8, 8);
+
             Text body = UiFactory.Label(panel.transform, "Body", 20, UiTheme.Text, FontStyle.Normal, TextAnchor.UpperLeft);
-            UiFactory.Anchor(body.rectTransform, new Vector2(0, 0), new Vector2(1, 1), new Vector2(24, 56), new Vector2(-24, -60));
+            UiFactory.Anchor(body.rectTransform, new Vector2(0, 0), new Vector2(1, 1), new Vector2(270, 56), new Vector2(-24, -60));
             Button close = UiFactory.Button(panel.transform, "Close", "Fermer", UiTheme.Slot);
             UiFactory.Anchor(close.GetComponent<RectTransform>(), new Vector2(0.3f, 0), new Vector2(0.7f, 0), new Vector2(0, 12), new Vector2(0, 48));
             close.onClick.AddListener(() => panel.gameObject.SetActive(false));

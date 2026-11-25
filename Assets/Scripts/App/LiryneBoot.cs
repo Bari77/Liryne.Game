@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace Liryne.Game.App
 {
-    /// <summary>Démarre le client sans objet de scène : login, serveurs, personnages, map.</summary>
+    /// <summary>Démarre le client sur la scène Boot, puis charge Titre ou map.</summary>
     public static class LiryneBoot
     {
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]

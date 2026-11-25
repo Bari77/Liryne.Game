@@ -2,24 +2,33 @@ using System;
 using System.Collections.Generic;
 using Liryne.Game.Content;
 using Liryne.Protocol;
+using Liryne.Protocol.Messages;
 using Liryne.Protocol.Messages.Characters;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
+#if ENABLE_INPUT_SYSTEM
+using UnityEngine.InputSystem;
+#endif
 
 namespace Liryne.Game.Ui
 {
     public sealed class CharacterScreen
     {
         readonly GameObject _root;
-        readonly Transform _list;
+        readonly GameObject _picker;
+        readonly Text _name;
         readonly Text _identity;
+        readonly Image _classMark;
+        readonly Image _affinityMark;
+        readonly Button _prev;
+        readonly Button _next;
         readonly Text _error;
         readonly GameObject _createPanel;
         readonly InputField _nameField;
         readonly Text _classLabel;
-        Text[] _appearanceLabels;
         readonly Action<Guid> _onPlay;
-        readonly Action<Guid, CharacterAppearance> _onAppearance;
+        readonly Action _onWardrobe;
         readonly Action<string, ushort, CharacterAppearance> _onCreate;
 
         IReadOnlyList<CharacterSummary> _characters = Array.Empty<CharacterSummary>();
@@ -34,86 +43,104 @@ namespace Liryne.Game.Ui
             Transform canvas,
             Action onBack,
             Action<Guid> onPlay,
-            Action<Guid, CharacterAppearance> onAppearance,
+            Action onWardrobe,
             Action<string, ushort, CharacterAppearance> onCreate)
         {
             _onPlay = onPlay;
-            _onAppearance = onAppearance;
+            _onWardrobe = onWardrobe;
             _onCreate = onCreate;
 
-            Image backdrop = UiFactory.Panel(canvas, "Characters", new Color(0.05f, 0.04f, 0.1f, 0.88f));
+            Image backdrop = UiFactory.Panel(canvas, "Characters", Color.clear);
             UiFactory.Stretch(backdrop.rectTransform);
+            backdrop.raycastTarget = false;
             _root = backdrop.gameObject;
 
-            Text title = UiFactory.Label(backdrop.transform, "Title", 34, UiTheme.Gold, FontStyle.Bold, TextAnchor.MiddleLeft);
-            UiFactory.Anchor(title.rectTransform, new Vector2(0, 1), new Vector2(0.4f, 1), new Vector2(36, -78), new Vector2(0, -24));
-            title.text = "Tes personnages";
+            TitleChrome.Attach(backdrop.transform, TitleChrome.LogoPlace.Compact);
 
-            Image listPanel = UiFactory.Panel(backdrop.transform, "ListPanel", UiTheme.Panel);
-            UiFactory.Anchor(listPanel.rectTransform, new Vector2(0, 0), new Vector2(0.28f, 1), new Vector2(28, 110), new Vector2(-8, -90));
-            UiFactory.Scroll(listPanel.transform, "List", out _list);
-            UiFactory.Stretch(_list.parent.GetComponent<RectTransform>(), 8, 8, 8, 8);
-
-            Image previewFrame = UiFactory.Panel(backdrop.transform, "PreviewFrame", UiTheme.Panel);
-            UiFactory.Anchor(previewFrame.rectTransform, new Vector2(0.29f, 0.18f), new Vector2(0.62f, 0.92f), new Vector2(8, 8), new Vector2(-8, -8));
             var rawGo = new GameObject("Raw");
-            rawGo.transform.SetParent(previewFrame.transform, false);
+            rawGo.transform.SetParent(backdrop.transform, false);
+            rawGo.SetActive(false);
             Preview = rawGo.AddComponent<RawImage>();
             Preview.color = Color.white;
-            UiFactory.Stretch(Preview.rectTransform, 12, 12, 12, 12);
-            var previewAspect = rawGo.AddComponent<AspectRatioFitter>();
-            previewAspect.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
-            previewAspect.aspectRatio = 512f / 768f;
 
             Image info = UiFactory.Panel(backdrop.transform, "Info", UiTheme.Panel);
-            UiFactory.Anchor(info.rectTransform, new Vector2(0.63f, 0.18f), new Vector2(1, 0.92f), new Vector2(8, 8), new Vector2(-28, -8));
-            _identity = UiFactory.Label(info.transform, "Identity", 22, UiTheme.Text, FontStyle.Normal, TextAnchor.UpperLeft);
-            UiFactory.Anchor(_identity.rectTransform, new Vector2(0, 0.72f), new Vector2(1, 1), new Vector2(20, 16), new Vector2(-20, -16));
-            BuildAppearancePad(info.transform);
+            UiFactory.Anchor(info.rectTransform, new Vector2(0.25f, 0f), new Vector2(0.75f, 0f), new Vector2(6, 112), new Vector2(-6, 348));
 
-            Button play = UiFactory.Button(backdrop.transform, "Play", "Entrer dans le monde", UiTheme.Accent);
-            UiFactory.Anchor(play.GetComponent<RectTransform>(), new Vector2(0.63f, 0), new Vector2(1, 0), new Vector2(8, 40), new Vector2(-28, 96));
-            play.onClick.AddListener(PlaySelected);
+            _picker = new GameObject("Picker");
+            _picker.transform.SetParent(info.transform, false);
+            var pickerRt = _picker.AddComponent<RectTransform>();
+            UiFactory.Anchor(pickerRt, new Vector2(0, 1), new Vector2(1, 1), new Vector2(12, -56), new Vector2(-12, -8));
 
-            Button appear = UiFactory.Button(backdrop.transform, "Appear", "Enregistrer l'apparence", UiTheme.PanelInner);
-            UiFactory.Anchor(appear.GetComponent<RectTransform>(), new Vector2(0.29f, 0), new Vector2(0.46f, 0), new Vector2(8, 40), new Vector2(-6, 96));
-            appear.onClick.AddListener(SaveAppearance);
+            _prev = UiFactory.Button(_picker.transform, "Prev", "<", UiTheme.PanelInner);
+            UiFactory.Anchor(_prev.GetComponent<RectTransform>(), new Vector2(0, 0.1f), new Vector2(0, 0.9f), new Vector2(0, 0), new Vector2(52, 0));
+            _prev.onClick.AddListener(() => ShiftSelected(-1));
 
-            Button create = UiFactory.Button(backdrop.transform, "New", "Nouveau personnage", UiTheme.PanelInner);
-            UiFactory.Anchor(create.GetComponent<RectTransform>(), new Vector2(0.46f, 0), new Vector2(0.62f, 0), new Vector2(6, 40), new Vector2(-8, 96));
-            create.onClick.AddListener(ToggleCreate);
+            _name = UiFactory.Label(_picker.transform, "Name", 28, UiTheme.Gold, FontStyle.Bold, TextAnchor.MiddleCenter);
+            UiFactory.Anchor(_name.rectTransform, new Vector2(0, 0), new Vector2(1, 1), new Vector2(58, 0), new Vector2(-58, 0));
+
+            _next = UiFactory.Button(_picker.transform, "Next", ">", UiTheme.PanelInner);
+            UiFactory.Anchor(_next.GetComponent<RectTransform>(), new Vector2(1, 0.1f), new Vector2(1, 0.9f), new Vector2(-52, 0), new Vector2(0, 0));
+            _next.onClick.AddListener(() => ShiftSelected(1));
+
+            _classMark = MakeEmblem(info.transform, "ClassMark", new Vector2(0.5f, 1f), new Vector2(-78, -128), new Vector2(-18, -68));
+            _affinityMark = MakeEmblem(info.transform, "AffinityMark", new Vector2(0.5f, 1f), new Vector2(18, -128), new Vector2(78, -68));
+
+            _identity = UiFactory.Label(info.transform, "Identity", 18, UiTheme.Text, FontStyle.Normal, TextAnchor.UpperCenter);
+            UiFactory.Anchor(_identity.rectTransform, new Vector2(0, 0), new Vector2(1, 1), new Vector2(16, 16), new Vector2(-16, -132));
 
             Button back = UiFactory.Button(backdrop.transform, "Back", "Déconnexion", UiTheme.Slot);
-            UiFactory.Anchor(back.GetComponent<RectTransform>(), new Vector2(0, 0), new Vector2(0.28f, 0), new Vector2(28, 40), new Vector2(-8, 96));
+            UiFactory.Anchor(back.GetComponent<RectTransform>(), new Vector2(0f, 0f), new Vector2(0.25f, 0f), new Vector2(28, 40), new Vector2(-6, 96));
             back.onClick.AddListener(() => onBack());
 
-            _error = UiFactory.Label(backdrop.transform, "Error", 18, UiTheme.Danger, FontStyle.Normal, TextAnchor.MiddleLeft);
-            UiFactory.Anchor(_error.rectTransform, new Vector2(0.29f, 0), new Vector2(0.62f, 0), new Vector2(8, 8), new Vector2(-8, 36));
+            Button appear = UiFactory.Button(backdrop.transform, "Appear", "Garde-robe", UiTheme.PanelInner);
+            UiFactory.Anchor(appear.GetComponent<RectTransform>(), new Vector2(0.25f, 0f), new Vector2(0.5f, 0f), new Vector2(6, 40), new Vector2(-6, 96));
+            appear.onClick.AddListener(OpenWardrobe);
+
+            Button create = UiFactory.Button(backdrop.transform, "New", "Nouveau personnage", UiTheme.PanelInner);
+            UiFactory.Anchor(create.GetComponent<RectTransform>(), new Vector2(0.5f, 0f), new Vector2(0.75f, 0f), new Vector2(6, 40), new Vector2(-6, 96));
+            create.onClick.AddListener(ToggleCreate);
+
+            Button play = UiFactory.Button(backdrop.transform, "Play", "Entrer dans le monde", UiTheme.Accent);
+            UiFactory.Anchor(play.GetComponent<RectTransform>(), new Vector2(0.75f, 0f), new Vector2(1f, 0f), new Vector2(6, 40), new Vector2(-28, 96));
+            play.onClick.AddListener(PlaySelected);
+
+            _error = UiFactory.Label(backdrop.transform, "Error", 18, UiTheme.Danger, FontStyle.Normal, TextAnchor.MiddleCenter);
+            UiFactory.Anchor(_error.rectTransform, new Vector2(0.25f, 0f), new Vector2(0.75f, 0f), new Vector2(6, 8), new Vector2(-6, 36));
 
             _createPanel = BuildCreate(backdrop.transform);
             _nameField = _createPanel.transform.Find("Name").GetComponent<InputField>();
             _classLabel = _createPanel.transform.Find("ClassLabel").GetComponent<Text>();
             _createPanel.SetActive(false);
+
+            var nav = _root.AddComponent<CharacterSelectNav>();
+            nav.Bind(ShiftSelected);
         }
 
         public CharacterAppearance CurrentAppearance => _draft;
+        public Guid SelectedId => _selected;
+        public bool IsCreating => _creating;
+
+        public ushort CurrentClassId =>
+            !_creating && IndexOf(_selected) >= 0 ? _characters[IndexOf(_selected)].ClassId : _createClass;
+
+        public event Action<Guid> SelectionChanged;
 
         public void Bind(IReadOnlyList<CharacterSummary> characters)
         {
             _characters = characters ?? Array.Empty<CharacterSummary>();
-            for (int i = _list.childCount - 1; i >= 0; i--)
-            {
-                UnityEngine.Object.Destroy(_list.GetChild(i).gameObject);
-            }
-
             if (_characters.Count == 0)
             {
                 _selected = Guid.Empty;
                 _creating = true;
                 _createPanel.SetActive(true);
                 RefreshCreateLabels();
-                _identity.text = "Aucun personnage pour l'instant.\nChoisis un nom, une classe, puis crée-le.";
-                AppearanceChanged?.Invoke(_draft);
+                _name.text = "Nouveau";
+                _identity.text = "Aucun personnage pour l'instant.\nChoisis un nom et une classe.";
+                _picker.SetActive(false);
+                _classMark.enabled = false;
+                _affinityMark.enabled = false;
+                NotifyPreview();
+                SelectionChanged?.Invoke(Guid.Empty);
                 return;
             }
 
@@ -122,50 +149,80 @@ namespace Liryne.Game.Ui
                 _selected = _characters[0].Id;
             }
 
-            foreach (CharacterSummary summary in _characters)
+            CharacterSummary current = Find(_selected) ?? _characters[0];
+            Select(current);
+        }
+
+        public void Select(Guid id)
+        {
+            CharacterSummary summary = Find(id);
+            if (summary is null)
             {
-                CharacterSummary captured = summary;
-                Image row = UiFactory.Panel(_list, summary.Id.ToString("N"), _selected == summary.Id ? UiTheme.Accent : UiTheme.PanelInner);
-                var le = row.gameObject.AddComponent<LayoutElement>();
-                le.minHeight = 78;
-                le.preferredHeight = 78;
-                Text label = UiFactory.Label(row.transform, "Label", 20, UiTheme.Text, FontStyle.Bold, TextAnchor.MiddleLeft);
-                UiFactory.Stretch(label.rectTransform, 18, 8, 12, 8);
-                label.text = $"{summary.Name}\n<size=16><color=#c8bdd8>{ClientCatalog.ClassName(summary.ClassId)}  ·  niveau {summary.Level}</color></size>";
-                label.supportRichText = true;
-                var button = row.gameObject.AddComponent<Button>();
-                button.onClick.AddListener(() => Select(captured, refreshList: true));
+                return;
             }
 
-            CharacterSummary current = Find(_selected) ?? _characters[0];
-            Select(current, refreshList: false);
+            Select(summary);
         }
 
         public void SetVisible(bool visible) => _root.SetActive(visible);
 
         public void SetError(string message) => _error.text = message ?? string.Empty;
 
-        public event Action<CharacterAppearance> AppearanceChanged;
+        public event Action<CharacterAppearance, ushort> AppearanceChanged;
 
-        void Select(CharacterSummary summary, bool refreshList)
+        public void ShiftSelected(int delta)
+        {
+            if (_creating || _characters.Count == 0)
+            {
+                return;
+            }
+
+            int index = IndexOf(_selected);
+            if (index < 0)
+            {
+                index = 0;
+            }
+
+            index = (index + delta + _characters.Count) % _characters.Count;
+            Select(_characters[index]);
+        }
+
+        void Select(CharacterSummary summary)
         {
             _creating = false;
             _createPanel.SetActive(false);
+            _picker.SetActive(true);
             _selected = summary.Id;
             _draft = summary.Appearance;
+            _name.text = summary.Name;
             _identity.text =
-                $"<b><size=28><color=#ddc06c>{summary.Name}</color></size></b>\n" +
-                $"{ClientCatalog.ClassName(summary.ClassId)}  ·  niveau {summary.Level}\n" +
-                $"{ClientCatalog.AffinityName(summary.Affinity)}\n" +
-                $"{ClientCatalog.TitleName(summary.TitleId)}\n" +
-                $"Ornement : {ClientCatalog.OrnamentName(summary.OrnamentId)}";
+                $"{ClientCatalog.ClassName(summary.ClassId)}  ·  Niv. {summary.Level}\n" +
+                $"{ClientCatalog.AffinityName(summary.Affinity)}  ·  {ClientCatalog.TitleName(summary.TitleId)}\n" +
+                $"{ClientCatalog.StartRealm}";
             _identity.supportRichText = true;
-            AppearanceChanged?.Invoke(_draft);
+            _classMark.sprite = EmblemArt.ClassMark(summary.ClassId);
+            _classMark.color = Color.white;
+            _classMark.enabled = true;
+            _affinityMark.sprite = EmblemArt.AffinityMark(summary.Affinity);
+            _affinityMark.color = Color.white;
+            _affinityMark.enabled = true;
+            bool many = _characters.Count > 1;
+            _prev.gameObject.SetActive(many);
+            _next.gameObject.SetActive(many);
+            NotifyPreview();
             RefreshCreateLabels();
-            if (refreshList)
+            SelectionChanged?.Invoke(_selected);
+        }
+
+        void OpenWardrobe()
+        {
+            if (_creating || _selected == Guid.Empty)
             {
-                Bind(_characters);
+                SetError("Choisis un personnage.");
+                return;
             }
+
+            _onWardrobe();
         }
 
         void PlaySelected()
@@ -179,25 +236,14 @@ namespace Liryne.Game.Ui
             _onPlay(_selected);
         }
 
-        void SaveAppearance()
-        {
-            if (_creating || _selected == Guid.Empty)
-            {
-                SetError("Choisis un personnage.");
-                return;
-            }
-
-            _onAppearance(_selected, _draft);
-            SetError(string.Empty);
-        }
-
         void ToggleCreate()
         {
             _creating = true;
             _createPanel.SetActive(true);
+            _picker.SetActive(false);
             _draft = CharacterAppearance.Default;
             RefreshCreateLabels();
-            AppearanceChanged?.Invoke(_draft);
+            NotifyPreview();
         }
 
         void CancelCreate()
@@ -210,7 +256,7 @@ namespace Liryne.Game.Ui
             _creating = false;
             _createPanel.SetActive(false);
             CharacterSummary current = Find(_selected) ?? _characters[0];
-            Select(current, refreshList: true);
+            Select(current);
         }
 
         void SubmitCreate()
@@ -221,7 +267,7 @@ namespace Liryne.Game.Ui
         GameObject BuildCreate(Transform parent)
         {
             Image panel = UiFactory.Panel(parent, "Create", UiTheme.Panel);
-            UiFactory.Anchor(panel.rectTransform, new Vector2(0, 0), new Vector2(0.28f, 1), new Vector2(28, 110), new Vector2(-8, -90));
+            UiFactory.Anchor(panel.rectTransform, new Vector2(0, 0), new Vector2(0.24f, 1), new Vector2(28, 110), new Vector2(-8, -90));
 
             Text heading = UiFactory.Label(panel.transform, "Heading", 24, UiTheme.Gold, FontStyle.Bold, TextAnchor.MiddleLeft);
             UiFactory.Anchor(heading.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(16, -52), new Vector2(-16, -12));
@@ -254,36 +300,6 @@ namespace Liryne.Game.Ui
             return panel.gameObject;
         }
 
-        GameObject BuildAppearancePad(Transform parent)
-        {
-            Image pad = UiFactory.Panel(parent, "AppearancePad", new Color(0, 0, 0, 0));
-            UiFactory.Anchor(pad.rectTransform, new Vector2(0, 0), new Vector2(1, 0.7f), new Vector2(12, 12), new Vector2(-12, 8));
-            string[] rows = { "Silhouette", "Visage", "Coupe", "Cheveux", "Peau", "Yeux" };
-            _appearanceLabels = new Text[rows.Length];
-            for (int i = 0; i < rows.Length; i++)
-            {
-                int index = i;
-                Image row = UiFactory.Panel(pad.transform, "Row" + i, UiTheme.Slot);
-                float top = -8 - i * 48;
-                UiFactory.Anchor(row.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(4, top - 42), new Vector2(-4, top));
-                Text caption = UiFactory.Label(row.transform, "Caption", 15, UiTheme.Muted, FontStyle.Normal, TextAnchor.MiddleLeft);
-                UiFactory.Anchor(caption.rectTransform, new Vector2(0, 0), new Vector2(0.38f, 1), new Vector2(10, 0), Vector2.zero);
-                caption.text = rows[i];
-                Button minus = UiFactory.Button(row.transform, "Minus", "<", UiTheme.PanelInner);
-                UiFactory.Anchor(minus.GetComponent<RectTransform>(), new Vector2(0.4f, 0.12f), new Vector2(0.52f, 0.88f), Vector2.zero, Vector2.zero);
-                minus.onClick.AddListener(() => ShiftAppearance(index, -1));
-                Text value = UiFactory.Label(row.transform, "Value", 16, UiTheme.Text, FontStyle.Bold, TextAnchor.MiddleCenter);
-                UiFactory.Anchor(value.rectTransform, new Vector2(0.52f, 0), new Vector2(0.88f, 1), Vector2.zero, Vector2.zero);
-                _appearanceLabels[i] = value;
-                Button plus = UiFactory.Button(row.transform, "Plus", ">", UiTheme.PanelInner);
-                UiFactory.Anchor(plus.GetComponent<RectTransform>(), new Vector2(0.88f, 0.12f), new Vector2(0.98f, 0.88f), Vector2.zero, Vector2.zero);
-                plus.onClick.AddListener(() => ShiftAppearance(index, 1));
-            }
-
-            RefreshCreateLabels();
-            return pad.gameObject;
-        }
-
         void ShiftClass(int delta)
         {
             int index = 0;
@@ -299,33 +315,10 @@ namespace Liryne.Game.Ui
             index = (index + delta + ClientCatalog.Classes.Length) % ClientCatalog.Classes.Length;
             _createClass = ClientCatalog.Classes[index].Id;
             RefreshCreateLabels();
+            NotifyPreview();
         }
 
-        void ShiftAppearance(int index, int delta)
-        {
-            byte Wrap(byte value, byte max)
-            {
-                int next = (value + delta) % max;
-                if (next < 0)
-                {
-                    next += max;
-                }
-
-                return (byte)next;
-            }
-
-            _draft = index switch
-            {
-                0 => _draft with { BodyType = Wrap(_draft.BodyType, ClientCatalog.BodyTypes) },
-                1 => _draft with { FaceId = Wrap(_draft.FaceId, ClientCatalog.Faces) },
-                2 => _draft with { HairStyleId = Wrap(_draft.HairStyleId, ClientCatalog.HairStyles) },
-                3 => _draft with { HairColorId = Wrap(_draft.HairColorId, ClientCatalog.HairColors) },
-                4 => _draft with { SkinToneId = Wrap(_draft.SkinToneId, ClientCatalog.SkinTones) },
-                _ => _draft with { EyeColorId = Wrap(_draft.EyeColorId, ClientCatalog.EyeColors) },
-            };
-            RefreshCreateLabels();
-            AppearanceChanged?.Invoke(_draft);
-        }
+        void NotifyPreview() => AppearanceChanged?.Invoke(_draft, CurrentClassId);
 
         void RefreshCreateLabels()
         {
@@ -344,18 +337,6 @@ namespace Liryne.Game.Ui
                 _classLabel.text = info.Name + "\n<size=14>" + info.Blurb + "</size>";
                 _classLabel.supportRichText = true;
             }
-
-            if (_appearanceLabels is null)
-            {
-                return;
-            }
-
-            _appearanceLabels[0].text = ClientCatalog.BodyLabel(_draft.BodyType);
-            _appearanceLabels[1].text = ClientCatalog.FaceLabel(_draft.FaceId);
-            _appearanceLabels[2].text = ClientCatalog.HairStyleLabel(_draft.HairStyleId);
-            _appearanceLabels[3].text = (_draft.HairColorId + 1).ToString();
-            _appearanceLabels[4].text = (_draft.SkinToneId + 1).ToString();
-            _appearanceLabels[5].text = (_draft.EyeColorId + 1).ToString();
         }
 
         int IndexOf(Guid id)
@@ -375,6 +356,50 @@ namespace Liryne.Game.Ui
         {
             int index = IndexOf(id);
             return index < 0 ? null : _characters[index];
+        }
+
+        static Image MakeEmblem(Transform parent, string name, Vector2 anchor, Vector2 offsetMin, Vector2 offsetMax)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            var image = go.AddComponent<Image>();
+            image.sprite = UiTheme.White;
+            image.preserveAspect = true;
+            image.raycastTarget = false;
+            UiFactory.Anchor(image.rectTransform, anchor, anchor, offsetMin, offsetMax);
+            return image;
+        }
+
+        sealed class CharacterSelectNav : MonoBehaviour
+        {
+            Action<int> _shift;
+
+            public void Bind(Action<int> shift) => _shift = shift;
+
+            void Update()
+            {
+                if (!isActiveAndEnabled || _shift is null)
+                {
+                    return;
+                }
+
+#if ENABLE_INPUT_SYSTEM
+                Keyboard keyboard = Keyboard.current;
+                if (keyboard is null)
+                {
+                    return;
+                }
+
+                if (keyboard.leftArrowKey.wasPressedThisFrame)
+                {
+                    _shift(-1);
+                }
+                else if (keyboard.rightArrowKey.wasPressedThisFrame)
+                {
+                    _shift(1);
+                }
+#endif
+            }
         }
     }
 }

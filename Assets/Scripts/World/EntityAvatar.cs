@@ -1,5 +1,7 @@
 using System;
+using Liryne.Game.Content;
 using Liryne.Protocol.Messages.Characters;
+using Liryne.Protocol.Messages.Combat;
 using Liryne.Protocol.Messages.Entities;
 using Liryne.Protocol.Wire;
 using UnityEngine;
@@ -19,6 +21,8 @@ namespace Liryne.Game.World
         public EntityKind Kind { get; private set; }
         public bool IsLocal { get; set; }
         public bool IsDead => LastState is not null && (LastState.Flags & EntityFlags.Dead) != 0;
+        public bool InCombat => LastState is not null && (LastState.Flags & EntityFlags.InCombat) != 0;
+        public bool IsCasting => LastState is not null && (LastState.Flags & EntityFlags.Casting) != 0;
 
         Vector3 _from;
         Vector3 _to;
@@ -32,6 +36,7 @@ namespace Liryne.Game.World
         Transform _hpFill;
         Transform _mpFill;
         GameObject _selectRing;
+        Material _ringMaterial;
         Camera _billboard;
         bool _selected;
 
@@ -53,7 +58,7 @@ namespace Liryne.Game.World
             avatar._billboard = billboard;
 
             EntityKindVisual kind = spawn.Kind == EntityKind.Monster ? EntityKindVisual.Monster : EntityKindVisual.Player;
-            avatar._visual = AvatarFactory.Create("Visual", spawn.Appearance, kind).transform;
+            avatar._visual = AvatarFactory.Create("Visual", spawn.Appearance, kind, spawn.TemplateId).transform;
             avatar._visual.SetParent(root.transform, false);
 
             avatar.BuildChrome(spawn);
@@ -73,7 +78,11 @@ namespace Liryne.Game.World
             OrnamentId = presentation.OrnamentId;
             if (_visual is not null)
             {
-                AvatarFactory.Apply(_visual.gameObject, presentation.Appearance, Kind == EntityKind.Monster ? EntityKindVisual.Monster : EntityKindVisual.Player);
+                AvatarFactory.Apply(
+                    _visual.gameObject,
+                    presentation.Appearance,
+                    Kind == EntityKind.Monster ? EntityKindVisual.Monster : EntityKindVisual.Player,
+                    ClassId);
             }
         }
 
@@ -109,13 +118,55 @@ namespace Liryne.Game.World
             transform.rotation = Quaternion.Euler(0f, facing, 0f);
         }
 
-        public void SetSelected(bool selected)
+        public void PlayStrike()
+        {
+            if (_visual is not null)
+            {
+                var walk = _visual.GetComponent<WalkCycle>();
+                if (walk is not null)
+                {
+                    walk.PlayStrike();
+                }
+            }
+        }
+
+        public void ShowCombatFloat(CombatEvent ev)
+        {
+            string caption = ClientCatalog.CombatFloatText(ev);
+            if (string.IsNullOrEmpty(caption))
+            {
+                return;
+            }
+
+            var go = new GameObject("CombatFloat");
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = new Vector3(UnityEngine.Random.Range(-0.28f, 0.28f), 2.35f, 0f);
+            var text = go.AddComponent<TextMesh>();
+            text.alignment = TextAlignment.Center;
+            text.anchor = TextAnchor.MiddleCenter;
+            text.fontSize = 42;
+            text.characterSize = 0.045f;
+            Font font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            if (font is not null)
+            {
+                text.font = font;
+            }
+
+            var floater = go.AddComponent<CombatFloat>();
+            floater.Bind(caption, ClientCatalog.CombatFloatColor(ev));
+        }
+
+        public void SetSelected(bool selected, bool attacking = false)
         {
             _selected = selected;
             if (_selectRing is not null)
             {
                 _selectRing.SetActive(selected);
             }
+
+            PaintRing(attacking
+                ? new Color(0.92f, 0.16f, 0.14f, 0.95f)
+                : new Color(0.95f, 0.78f, 0.28f, 0.9f));
         }
 
         void Update()
@@ -138,7 +189,7 @@ namespace Liryne.Game.World
         {
             var chrome = new GameObject("Chrome");
             chrome.transform.SetParent(transform, false);
-            chrome.transform.localPosition = new Vector3(0f, 2.45f, 0f);
+            chrome.transform.localPosition = new Vector3(0f, 2.12f, 0f);
             _chrome = chrome.transform;
 
             var plate = new GameObject("Name");
@@ -174,22 +225,30 @@ namespace Liryne.Game.World
             Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
             if (ringRenderer is not null && shader is not null)
             {
-                var material = new Material(shader);
-                Color gold = new Color(0.95f, 0.78f, 0.28f, 0.9f);
-                if (material.HasProperty("_BaseColor"))
-                {
-                    material.SetColor("_BaseColor", gold);
-                }
-
-                if (material.HasProperty("_Color"))
-                {
-                    material.color = gold;
-                }
-
-                ringRenderer.sharedMaterial = material;
+                _ringMaterial = new Material(shader);
+                ringRenderer.sharedMaterial = _ringMaterial;
             }
 
+            PaintRing(new Color(0.95f, 0.78f, 0.28f, 0.9f));
             _selectRing.SetActive(false);
+        }
+
+        void PaintRing(Color color)
+        {
+            if (_ringMaterial is null)
+            {
+                return;
+            }
+
+            if (_ringMaterial.HasProperty("_BaseColor"))
+            {
+                _ringMaterial.SetColor("_BaseColor", color);
+            }
+
+            if (_ringMaterial.HasProperty("_Color"))
+            {
+                _ringMaterial.color = color;
+            }
         }
 
         static Transform MakeBar(Transform parent, string name, Vector3 offset, Color fill)

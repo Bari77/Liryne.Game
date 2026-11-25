@@ -43,7 +43,7 @@ Monter de version : produire le paquet dans Protocol (`dotnet pack src/Liryne.Pr
 
 ## Ce qui est déjà là
 
-Deux images de logo, à la racine. Un projet Unity 6 (6000.6.10f1) en URP, issu du modèle, avec `Liryne.Protocol` 0.4.0 branché.
+Deux images de logo, à la racine. Un projet Unity 6 (6000.6.10f1) en URP, issu du modèle, avec `Liryne.Protocol` 0.5.0 branché.
 
 | Fichier | Contenu |
 | --- | --- |
@@ -54,9 +54,9 @@ La lyre a quatre cordes : feu, eau, lumière, ténèbres, de gauche à droite. L
 
 ## État actuel
 
-Client jouable. Scène par défaut : `Assets/Scenes/Liryne.unity` (Play la lance tout seul). Village de la Clairière autour du spawn : place, puits, auberge, maisons, marché, arbres. Login Auth, serveurs (`Assets/StreamingAssets/servers.json`), création / sélection / apparence, déplacement, chat, profil, inventaire vide. Placeholders capsules. Pas de sorts encore.
+Client jouable. Scène par défaut : `Assets/Scenes/Liryne.unity` (Play la lance tout seul). Village de la Clairière autour du spawn : place, puits, auberge, maisons, marché, arbres. Login Auth, serveurs (`Assets/StreamingAssets/servers.json`), création / sélection / apparence, déplacement avec collision, saut, chat, profil, inventaire vide, barre de sorts 1-8.
 
-Dans Unity : ouvre le projet, appuie sur Play. Menu `Liryne → Ouvrir la scène du village` si une autre scène est ouverte. Auth + World doivent tourner (`http://127.0.0.1:8080`, TCP `7777`). WASD, Entrée chat, C profil, I sac.
+Dans Unity : ouvre le projet, appuie sur Play. Menu `Liryne → Ouvrir la scène du village` si une autre scène est ouverte. Auth + World doivent tourner (`http://127.0.0.1:8080`, TCP `7777`). WASD, Espace saut, 1-8 sorts, Tab cible, Entrée chat, C profil, I sac.
 
 ## Premier travail
 
@@ -64,7 +64,7 @@ Dans Unity : ouvre le projet, appuie sur Play. Menu `Liryne → Ouvrir la scène
 2. ~~Brancher `Liryne.Protocol` depuis le flux local.~~
 3. ~~Une scène : un sol, un personnage placeholder, la lyre à l’écran titre.~~
 4. ~~Brancher la connexion : session obtenue via Auth, puis entrée dans World.~~
-5. Envoyer une intention de sort et jouer l’animation du résultat. Ne pas calculer les dégâts dans un script Unity.
+5. ~~Envoyer une intention de sort et jouer l’animation du résultat. Ne pas calculer les dégâts dans un script Unity.~~ Chiffres de combat affichés depuis `CombatEvents`.
 
 ## Garde-fous
 

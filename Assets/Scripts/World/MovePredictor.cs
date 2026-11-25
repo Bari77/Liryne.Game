@@ -27,12 +27,7 @@ namespace Liryne.Game.World
             for (int i = 0; i < _pending.Count; i++)
             {
                 Pending move = _pending[i];
-                Vector2 dir = new Vector2(move.DirX, move.DirZ);
-                if (dir.sqrMagnitude > 0.0001f)
-                {
-                    dir.Normalize();
-                    position += new Vector3(dir.x, 0f, dir.y) * moveSpeed * tickDelta;
-                }
+                position = VillageCollision.MovePlanar(position, move.DirX, move.DirZ, moveSpeed, tickDelta);
             }
 
             return position;

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Sockets;
+using System.Threading.Tasks;
 using UnityEngine;
 
 namespace Liryne.Game.Content
@@ -45,6 +47,32 @@ namespace Liryne.Game.Content
             }
 
             return new[] { new ServerInfo() };
+        }
+
+        public static async Task<bool> IsWorldReachable(ServerInfo server, int timeoutMs = 2000)
+        {
+            if (server is null || string.IsNullOrWhiteSpace(server.worldHost) || server.worldPort <= 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                using var tcp = new TcpClient();
+                Task connect = tcp.ConnectAsync(server.worldHost, server.worldPort);
+                Task finished = await Task.WhenAny(connect, Task.Delay(timeoutMs)).ConfigureAwait(true);
+                if (finished != connect)
+                {
+                    return false;
+                }
+
+                await connect.ConfigureAwait(true);
+                return tcp.Connected;
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }

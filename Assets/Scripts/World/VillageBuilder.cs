@@ -7,8 +7,6 @@ namespace Liryne.Game.World
     /// </summary>
     public static class VillageBuilder
     {
-        static Shader _lit;
-
         public static void Build(Transform parent)
         {
             var root = new GameObject("VillageClairiere");
@@ -27,6 +25,8 @@ namespace Liryne.Game.World
             House(root.transform, "MaisonNordOuest", new Vector3(-17f, 0f, 18f), 140f, Hex("efe0d0"), Hex("3a4a6a"), new Vector3(4.6f, 2.5f, 4.2f));
             Stall(root.transform, new Vector3(13.5f, 0f, 1.5f), -90f);
             Notice(root.transform, new Vector3(-1.2f, 0f, 6.5f));
+            Crate(root.transform, new Vector3(3.4f, 0f, -1.1f), 18f, new Vector3(0.9f, 0.72f, 0.9f), Hex("b48a58"));
+            Crate(root.transform, new Vector3(4.4f, 0f, -1.4f), -12f, new Vector3(0.8f, 0.58f, 0.8f), Hex("c49a62"));
             FenceRing(root.transform);
             Trees(root.transform);
             Flowers(root.transform);
@@ -106,6 +106,11 @@ namespace Liryne.Game.World
             Cube("PiedR", parent, pos + rot * new Vector3(1.4f, 0.35f, 0f), rot, new Vector3(0.16f, 0.7f, 0.16f), Hex("5a3a22"));
             Cube("Toile", parent, pos + new Vector3(0f, 1.7f, 0f), rot * Quaternion.Euler(12f, 0f, 0f), new Vector3(3.6f, 0.08f, 1.8f), Hex("c45a4a"));
             Sign(parent, "Marché", pos + new Vector3(0f, 2.15f, 0f), 16, Hex("fff0e0"));
+        }
+
+        static void Crate(Transform parent, Vector3 pos, float yaw, Vector3 size, Color color)
+        {
+            Cube("Caisse", parent, pos + new Vector3(0f, size.y * 0.5f, 0f), Quaternion.Euler(0f, yaw, 0f), size, color);
         }
 
         static void Notice(Transform parent, Vector3 pos)
@@ -223,6 +228,7 @@ namespace Liryne.Game.World
             go.transform.SetPositionAndRotation(pos, rot);
             go.transform.localScale = scale;
             Paint(go, color);
+            DropCollider(go);
         }
 
         static void Paint(GameObject go, Color color)
@@ -233,25 +239,10 @@ namespace Liryne.Game.World
                 return;
             }
 
-            if (_lit is null)
-            {
-                _lit = Shader.Find("Universal Render Pipeline/Lit")
-                    ?? Shader.Find("Universal Render Pipeline/Simple Lit")
-                    ?? Shader.Find("Sprites/Default");
-            }
-
-            var material = new Material(_lit);
-            if (material.HasProperty("_BaseColor"))
-            {
-                material.SetColor("_BaseColor", color);
-            }
-
-            if (material.HasProperty("_Color"))
-            {
-                material.SetColor("_Color", color);
-            }
-
-            renderer.sharedMaterial = material;
+            SurfaceKind kind = SurfaceArt.Guess(color);
+            Vector3 scale = go.transform.localScale;
+            var tiling = new Vector2(Mathf.Max(1.2f, Mathf.Abs(scale.x) * 0.35f), Mathf.Max(1.2f, Mathf.Abs(scale.y) * 0.45f));
+            SurfaceArt.Apply(renderer, color, kind, 0.22f, false, tiling);
         }
 
         static void DropCollider(GameObject go)

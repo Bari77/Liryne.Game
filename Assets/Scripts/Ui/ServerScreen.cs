@@ -16,17 +16,23 @@ namespace Liryne.Game.Ui
         public ServerScreen(Transform canvas, Action onBack, Action<ServerInfo> onChoose)
         {
             _onChoose = onChoose;
-            Image backdrop = UiFactory.Panel(canvas, "Servers", UiTheme.Backdrop);
+            Image backdrop = UiFactory.Panel(canvas, "Servers", Color.black);
             UiFactory.Stretch(backdrop.rectTransform);
+            backdrop.raycastTarget = false;
             _root = backdrop.gameObject;
 
-            Text title = UiFactory.Label(backdrop.transform, "Title", 36, UiTheme.Gold, FontStyle.Bold, TextAnchor.MiddleCenter);
-            UiFactory.Anchor(title.rectTransform, new Vector2(0.5f, 1), new Vector2(0.5f, 1), new Vector2(-320, -110), new Vector2(320, -40));
+            TitleChrome.Attach(backdrop.transform, TitleChrome.LogoPlace.Compact, paintedScene: true);
+
+            Image card = UiFactory.Panel(backdrop.transform, "Card", UiTheme.Panel);
+            UiFactory.Anchor(card.rectTransform, new Vector2(0.5f, 0.48f), new Vector2(0.5f, 0.48f), new Vector2(-380, -250), new Vector2(380, 250));
+
+            Text title = UiFactory.Label(card.transform, "Title", 28, UiTheme.Gold, FontStyle.Bold, TextAnchor.MiddleCenter);
+            UiFactory.Anchor(title.rectTransform, new Vector2(0, 1), new Vector2(1, 1), new Vector2(16, -56), new Vector2(-16, -12));
             title.text = "Choisis un serveur";
 
-            UiFactory.Scroll(backdrop.transform, "List", out _list);
+            UiFactory.Scroll(card.transform, "List", out _list);
             var scroll = _list.parent.GetComponent<RectTransform>();
-            UiFactory.Anchor(scroll, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-360, -220), new Vector2(360, 220));
+            UiFactory.Anchor(scroll, new Vector2(0, 0), new Vector2(1, 1), new Vector2(20, 72), new Vector2(-20, -64));
 
             Button back = UiFactory.Button(backdrop.transform, "Back", "Retour", UiTheme.PanelInner);
             UiFactory.Anchor(back.GetComponent<RectTransform>(), new Vector2(0.5f, 0), new Vector2(0.5f, 0), new Vector2(-120, 40), new Vector2(120, 96));

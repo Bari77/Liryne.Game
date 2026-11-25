@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Liryne.Protocol.Messages.Combat;
 using Liryne.Protocol.Messages.Entities;
 using Liryne.Protocol.Wire;
 using UnityEngine;
@@ -20,7 +21,10 @@ namespace Liryne.Game.World
         float _followYaw = 180f;
         float _followPitch = 22f;
         float _followDistance = 12.5f;
+        const float ZoomMin = 4f;
+        const float ZoomMax = 20f;
         Guid _selectedId;
+        float _verticalVelocity;
 
         public Guid LocalEntityId { get; private set; }
         public EntityAvatar Local => _local;
@@ -38,21 +42,21 @@ namespace Liryne.Game.World
             _ground.transform.SetParent(_root, false);
             _ground.transform.localScale = new Vector3(16f, 1f, 16f);
             PaintGround(_ground);
-            if (GameObject.Find("VillageClairiere") is null)
-            {
-                VillageBuilder.Build(_root);
-            }
 
             EnsureCamera();
-            OrbitLobby(0f);
+            SetVisible(false);
         }
 
         public void SetVisible(bool visible)
         {
+            _root.gameObject.SetActive(visible);
             if (visible)
             {
-                _root.gameObject.SetActive(true);
                 EnsureCamera();
+                if (_camera is not null)
+                {
+                    _camera.enabled = true;
+                }
             }
         }
 
@@ -60,6 +64,7 @@ namespace Liryne.Game.World
         {
             LocalEntityId = localEntityId;
             _predictor.Clear();
+            _verticalVelocity = 0f;
             EnsureCamera();
             SetVisible(true);
             Vector3 pos = EntityAvatar.ToUnity(position);
@@ -128,13 +133,24 @@ namespace Liryne.Game.World
                     if ((state.Flags & EntityFlags.Teleported) != 0)
                     {
                         predicted = server;
+                        _verticalVelocity = 0f;
                     }
                     else
                     {
+                        if (server.y <= 0.05f && avatar.transform.position.y > 0.15f)
+                        {
+                            predicted.y = avatar.transform.position.y;
+                        }
+
                         float error = Vector3.Distance(avatar.transform.position, predicted);
                         if (error < 2.5f)
                         {
                             predicted = Vector3.Lerp(avatar.transform.position, predicted, 0.45f);
+                        }
+
+                        if (predicted.y <= VillageCollision.GroundEpsilon)
+                        {
+                            _verticalVelocity = 0f;
                         }
                     }
 
@@ -149,24 +165,52 @@ namespace Liryne.Game.World
 
         public void RecordMove(uint sequence, float dirX, float dirZ) => _predictor.Record(sequence, dirX, dirZ);
 
-        public void PredictLocal(float dirX, float dirZ, float dt)
+        public void PredictLocal(float dirX, float dirZ, bool jump, float dt)
         {
             if (_local is null)
             {
                 return;
             }
 
-            Vector2 dir = new Vector2(dirX, dirZ);
-            if (dir.sqrMagnitude <= 0.0001f)
+            Vector3 next = _local.transform.position;
+            if (_local.IsDead)
             {
-                return;
+                dirX = 0f;
+                dirZ = 0f;
+                jump = false;
             }
 
-            dir.Normalize();
             float speed = _local.LastState?.MoveSpeed ?? 6f;
-            Vector3 next = _local.transform.position + new Vector3(dir.x, 0f, dir.y) * speed * dt;
-            float facing = Mathf.Atan2(dir.x, dir.y) * Mathf.Rad2Deg;
+            VillageCollision.Integrate(ref next, ref _verticalVelocity, dirX, dirZ, speed, jump, dt);
+            Vector2 dir = new Vector2(dirX, dirZ);
+            float facing = _local.transform.eulerAngles.y;
+            if (dir.sqrMagnitude > 0.0001f)
+            {
+                facing = Mathf.Atan2(dir.x, dir.y) * Mathf.Rad2Deg;
+            }
+
             _local.SnapTo(next, facing);
+        }
+
+        public void PlayStrike(Guid entityId)
+        {
+            if (_avatars.TryGetValue(entityId, out EntityAvatar avatar))
+            {
+                avatar.PlayStrike();
+            }
+        }
+
+        public void PlayCombat(CombatEvents batch)
+        {
+            foreach (CombatEvent ev in batch.Events)
+            {
+                if (!_avatars.TryGetValue(ev.TargetEntityId, out EntityAvatar avatar))
+                {
+                    continue;
+                }
+
+                avatar.ShowCombatFloat(ev);
+            }
         }
 
         public void Clear()
@@ -184,6 +228,7 @@ namespace Liryne.Game.World
             LocalEntityId = Guid.Empty;
             _selectedId = Guid.Empty;
             _predictor.Clear();
+            _verticalVelocity = 0f;
         }
 
         public Vector2 ToCameraMove(float x, float z)
@@ -254,6 +299,14 @@ namespace Liryne.Game.World
         public EntityAvatar Selected =>
             _avatars.TryGetValue(_selectedId, out EntityAvatar avatar) ? avatar : null;
 
+        public void SetSelectedAttacking(bool attacking)
+        {
+            if (_avatars.TryGetValue(_selectedId, out EntityAvatar avatar))
+            {
+                avatar.SetSelected(true, attacking);
+            }
+        }
+
         void SetSelected(Guid id)
         {
             if (_avatars.TryGetValue(_selectedId, out EntityAvatar previous))
@@ -288,6 +341,11 @@ namespace Liryne.Game.World
         {
             _followYaw = Mathf.Repeat(_followYaw + yawDelta, 360f);
             _followPitch = Mathf.Clamp(_followPitch - pitchDelta, 8f, 62f);
+        }
+
+        public void ZoomFollow(float delta)
+        {
+            _followDistance = Mathf.Clamp(_followDistance + delta, ZoomMin, ZoomMax);
         }
 
         public void FollowCamera()
@@ -330,28 +388,19 @@ namespace Liryne.Game.World
             _camera.fieldOfView = 50f;
             _camera.nearClipPlane = 0.1f;
             _camera.farClipPlane = 250f;
-            int previewBit = 1 << 31;
-            _camera.cullingMask &= ~previewBit;
+            int hidden = (1 << 31) | (1 << 30);
+            _camera.cullingMask = ~hidden;
         }
 
         static void PaintGround(GameObject ground)
         {
             var renderer = ground.GetComponent<MeshRenderer>();
-            Shader shader = Shader.Find("Universal Render Pipeline/Lit")
-                ?? Shader.Find("Universal Render Pipeline/Simple Lit");
-            if (shader is null || renderer is null)
+            if (renderer is null)
             {
                 return;
             }
 
-            var material = new Material(shader);
-            var color = new Color(0.27f, 0.46f, 0.30f);
-            if (material.HasProperty("_BaseColor"))
-            {
-                material.SetColor("_BaseColor", color);
-            }
-
-            renderer.sharedMaterial = material;
+            SurfaceArt.Apply(renderer, new Color(0.27f, 0.46f, 0.30f), SurfaceKind.Grass, 0.18f, false, new Vector2(8f, 8f));
         }
     }
 }

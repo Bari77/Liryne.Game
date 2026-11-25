@@ -3,6 +3,7 @@ using Liryne.Protocol.Messages;
 using Liryne.Protocol.Messages.Auth;
 using Liryne.Protocol.Messages.Characters;
 using Liryne.Protocol.Messages.Chat;
+using Liryne.Protocol.Messages.Combat;
 using Liryne.Protocol.Messages.Session;
 using UnityEngine;
 
@@ -14,6 +15,8 @@ namespace Liryne.Game.Content
     /// </summary>
     public static class ClientCatalog
     {
+        public static string StartRealm => MapCatalog.Name(MapCatalog.LyreGlade);
+
         public const byte BodyTypes = 2;
         public const byte Faces = 8;
         public const byte HairStyles = 12;
@@ -177,6 +180,130 @@ namespace Liryne.Game.Content
             DisconnectReason.Timeout => "Connexion trop longue sans activité.",
             DisconnectReason.Banned => "Compte banni.",
             _ => "Déconnecté.",
+        };
+
+        public static bool IsAutoSpell(ushort spellId)
+        {
+            if (spellId < 1000 || spellId % 1000 != 0)
+            {
+                return false;
+            }
+
+            int classId = spellId / 1000;
+            return classId >= 1 && classId <= 6;
+        }
+
+        public static ushort AutoSpellId(ushort classId) => (ushort)(classId * 1000);
+
+        public static float AutoSpellRange(ushort classId) => classId switch
+        {
+            3 => 17f,
+            4 => 15f,
+            6 => 11f,
+            _ => 5.5f,
+        };
+
+        public static string SpellName(ushort spellId)
+        {
+            if (IsAutoSpell(spellId))
+            {
+                return (spellId / 1000) switch
+                {
+                    1 => "Coup d'épée",
+                    2 => "Estoc",
+                    3 => "Flèche",
+                    4 => "Trait",
+                    5 => "Frappe",
+                    6 => "Choc",
+                    _ => "Attaque",
+                };
+            }
+
+            int classId = spellId / 1000;
+            int slot = spellId % 100;
+            if (classId == 5)
+            {
+                return slot switch
+                {
+                    1 => "Châtiment",
+                    2 => "Soin",
+                    3 => "Bénédiction",
+                    4 => "Bouclier",
+                    5 => "Purge",
+                    6 => "Cercle",
+                    7 => "Jugement",
+                    8 => "Sanctuaire",
+                    _ => "Sort " + slot,
+                };
+            }
+
+            if (classId == 6)
+            {
+                return slot switch
+                {
+                    1 => "Appel",
+                    2 => "Frappe",
+                    3 => "Meute",
+                    4 => "Gardien",
+                    5 => "Essaim",
+                    6 => "Lien",
+                    7 => "Rituel",
+                    8 => "Conclave",
+                    _ => "Sort " + slot,
+                };
+            }
+
+            return slot switch
+            {
+                1 => "Frappe",
+                2 => "Salve",
+                3 => "Élan",
+                4 => "Rempart",
+                5 => "Taille",
+                6 => "Sceau",
+                7 => "Onde",
+                8 => "Éclat",
+                _ => "Sort " + slot,
+            };
+        }
+
+        public static string SpellOutcomeText(SpellOutcome outcome) => outcome switch
+        {
+            SpellOutcome.Cast => string.Empty,
+            SpellOutcome.UnknownSpell => "Sort inconnu.",
+            SpellOutcome.OnCooldown => "Pas encore prêt.",
+            SpellOutcome.OutOfRange => "Trop loin.",
+            SpellOutcome.InvalidTarget => "Cible invalide.",
+            SpellOutcome.NotEnoughMana => "Pas assez de PM.",
+            SpellOutcome.Interrupted => "Incantation interrompue.",
+            SpellOutcome.Cancelled => "Sort annulé.",
+            SpellOutcome.Incapacitated => "Impossible d'agir.",
+            SpellOutcome.CasterDead => "Tu es hors combat.",
+            SpellOutcome.NoLineOfSight => "Pas de ligne de vue.",
+            _ => "Sort refusé.",
+        };
+
+        public static string CombatFloatText(CombatEvent ev) => ev.Kind switch
+        {
+            CombatEventKind.Damage => ((ev.Flags & CombatEventFlags.Critical) != 0 ? "!" : string.Empty) + ev.Amount,
+            CombatEventKind.Heal => "+" + ev.Amount,
+            CombatEventKind.ManaDamage => "-" + ev.Amount + " PM",
+            CombatEventKind.ManaRestore => "+" + ev.Amount + " PM",
+            CombatEventKind.Miss => "Raté",
+            CombatEventKind.Dodge => "Esquive",
+            CombatEventKind.Immune => "Immunisé",
+            _ => string.Empty,
+        };
+
+        public static Color CombatFloatColor(CombatEvent ev) => ev.Kind switch
+        {
+            CombatEventKind.Damage => (ev.Flags & CombatEventFlags.Critical) != 0
+                ? new Color(1f, 0.82f, 0.35f)
+                : new Color(1f, 0.42f, 0.38f),
+            CombatEventKind.Heal => new Color(0.45f, 0.92f, 0.55f),
+            CombatEventKind.ManaRestore => new Color(0.45f, 0.7f, 1f),
+            CombatEventKind.ManaDamage => new Color(0.55f, 0.45f, 0.95f),
+            _ => new Color(0.9f, 0.88f, 0.95f),
         };
 
         public static string ChatRejectText(ChatRejectReason reason) => reason switch
